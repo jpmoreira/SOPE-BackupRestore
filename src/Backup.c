@@ -20,6 +20,13 @@
 #include <limits.h>
 #include <unistd.h>
 #include <time.h>
+#include <signal.h>
+
+#define TRANSFER_BUF_SIZE 200
+
+int nrSons=0;
+
+
 
 //#define FTW_SKIP_SIBLINGS 3;// not defined I think it's 3!!!
 typedef enum {
@@ -37,11 +44,33 @@ typedef enum {
 } bool;
 
 
+void waitForSons(){
+	while(nrSons--!=0){
+		wait();
+	}
+}
+
+void sigUSR1_Handler(int n){
+	printf("called\n");
+
+	waitForSons();
+	exit(1);
+}
+
+void installSigHandler(){
+	struct sigaction mySigAction;
+	mySigAction.sa_handler=sigUSR1_Handler;
+
+	sigaction(SIGUSR1,&mySigAction,NULL);
+}
+
+
+
 char * createPath(char* parentDir,char *name){
 
-	if(parentDir==NULL || name==NULL)return NULL;
+	if(parentDir==NULL || name==NULL){return NULL;}
 
-	else if(parentDir[strlen(parentDir)]=='/')parentDir[strlen(parentDir)]='\0';//if already has the bar remove it
+	else if(parentDir[strlen(parentDir)]=='/'){parentDir[strlen(parentDir)]='\0';}//if already has the bar remove it
 
 
 
@@ -63,7 +92,7 @@ bool SourceIsDest(char* sourcePath, char* destPath) {
 	free(fullSourcePath);
 	free(fullDestPath);
 
-	if(result==0)return true;
+	if(result==0){return true;}
 	return false;
 
 }
@@ -104,59 +133,51 @@ ErrorCode verifyErrors(int argc, char **argv, DIR **source, DIR **dest) {
 
 int getBckpTimeStamp(char* dirPath) {
 	char* filePath = createPath(dirPath, "__bckpinfo__");
-//	int fd = open(filePath, O_RDONLY);
-//	free(filePath);
-//
-//	if (fd == -1) return -1;//if could not open file
-//
-//	else {//TODO maybe use an fscanf with fopen??
-//		char buf[11];//get a buffer
-//		buf[10] = '\0';//
-//		if (read(fd, buf, 10) != -1) { //if we can read
-//			int timestamp = atoi(buf);
-//			close(fd);
-//			return timestamp;
-//		}
-//
-//	}
-//
-//	return -1;
-
 	FILE * theFile=fopen(filePath,"r");
 	free(filePath);
 
+
+	if(theFile==NULL){ return -1;}//if we could not open file for some reason
+
+	int time_stamp=-1;
+	fscanf(theFile,"%i\n",&time_stamp);
+	fclose(theFile);
+	return time_stamp;
+
 }
 
-char * getLatestBckpDir(char *destPath) {//TODO review this
+char * getLatestBckpDir(char *destDirPath) {
 
-	DIR * dest = opendir(destPath);
+	DIR * dest = opendir(destDirPath);
 
-	char* complete_dest_path = (char*) canonicalize_file_name(destPath);
+	char* complete_dest_path = (char*) canonicalize_file_name(destDirPath);
 	struct dirent *dir_entry;
 	char* path = NULL;
 	int timestamp = 0;
 
-	dir_entry = readdir(dest);
 
-	while (dir_entry != NULL ) {
-		if (dir_entry->d_type == DT_DIR && strcmp(dir_entry->d_name,"..")!=0) { //if its a directory that is not our father
+	while ((dir_entry = readdir(dest)) != NULL ) {//while we dont reach end of dir
+
+		bool parentOrSelf=false;
+		if(strcmp(dir_entry->d_name,"..")==0 || strcmp(dir_entry->d_name,".")==0){ parentOrSelf=true;}
+
+		if (dir_entry->d_type == DT_DIR && parentOrSelf==false) { //if its a directory that is not our father
+
 			char* tempPath = createPath(complete_dest_path, dir_entry->d_name); //path to the subdir
 			int temp = getBckpTimeStamp(tempPath);
 			if (temp > timestamp ) { //if we got a new more recent backup
-				if (path != NULL ) { //if we already got a a previous path stored
-					free(path);
-				}
+
+				if (path != NULL ){ free(path);}//if we already have stored one that is worst
+
 				path = tempPath;
 				timestamp = temp;
-			} else { //if doesnt fit
-				free(tempPath);
-			}
+			} else{ free(tempPath);}// if we already have a better one
 
 		}
 
-		dir_entry = readdir(dest);
 	}
 
+	free(complete_dest_path);
 	closedir(dest);
 
 	return path;
@@ -165,16 +186,16 @@ char * getLatestBckpDir(char *destPath) {//TODO review this
 
 int getNumOfFiles(char* dirPath) {
 	int nr = 0;
-	struct dirent *dir_entry = NULL;
+	struct dirent *dir_entry;
 	DIR *theDir = opendir(dirPath);
 
-	if(theDir==NULL)return 0;
+	if(theDir==NULL){return 0;}
 
 
-	dir_entry = readdir(theDir);
-	while (dir_entry != NULL ) {
-		if (dir_entry->d_type == DT_REG) nr++;
-		dir_entry = readdir(theDir);
+	while ((dir_entry = readdir(theDir)) != NULL ) {
+
+		if (dir_entry->d_type == DT_REG){ nr++;}
+
 	}
 	closedir(theDir);
 
@@ -183,24 +204,31 @@ int getNumOfFiles(char* dirPath) {
 
 char** getFileList(char * sourcePath) {
 	int nrOfFilesInSource = getNumOfFiles(sourcePath);
+	printf("got num files = %d\n",nrOfFilesInSource);
 	DIR *source = opendir(sourcePath);
-	struct dirent *dir_entry = readdir(source);
+	struct dirent *dir_entry;
 	char ** fileList = malloc(nrOfFilesInSource * sizeof(char*) + 1);
 	fileList[nrOfFilesInSource] = NULL;
 
 	char * sourceCompletePath = (char*) canonicalize_file_name(sourcePath);
 
 	int index = 0;
-	while (dir_entry != NULL ) {
+	printf("will enter while\n");
+	while ((dir_entry = readdir(source)) != NULL ) {
 
-		if (dir_entry->d_type == DT_REG) fileList[index++] = createPath(sourceCompletePath,dir_entry->d_name);
+		if (dir_entry->d_type == DT_REG){
+			fileList[index++] = createPath(sourceCompletePath,dir_entry->d_name);
+			printf("created path %s\n",fileList[index-1]);
+		}
 
-		dir_entry = readdir(source);
 	}
+	printf("ended\n");
 
 	closedir(source);
 
+	printf("will close\n");
 	free(sourceCompletePath);
+	printf("will return\n");
 	return fileList;
 }
 
@@ -224,63 +252,59 @@ char * extractFileName(char * path) {
 
 bool filePresentInBckp(char* filePath, char * backupFilePath) {
 
-	int fd = open(backupFilePath, O_RDONLY);
-	int filePathSize = strlen(filePath);
-	char* buf = malloc((2 * filePathSize + 1) * sizeof(char));//create a buffer at least two times the size of the file name we're searching for
-	buf[2 * filePathSize] = '\0';
+	FILE *theBckpFile=fopen(backupFilePath, "r");
 
-	int readRet = read(fd, buf, 2 * filePathSize);//fill the buffer
+	char* buf= malloc((PATH_MAX)*sizeof(char));//allocate a buf with maximum path size (PATH_MAX includes null terminator)
+	buf[PATH_MAX-1]='\0';
+	while(fscanf(theBckpFile,"%[^\n]\n",buf)!=EOF){//read everything but a \n and place it at the buf and then read the \n
+		if(strcmp(buf,filePath)==0){
 
-	while (readRet >= filePathSize / 2) {//while we read at least nameoffile/2 characters keep on going
-		if (strstr(buf, filePath) != NULL ) {//if we do have a match
-			close(fd);
+			fclose(theBckpFile);
 			free(buf);
 			return true;
 		}
-		lseek(fd,-2*filePathSize+filePathSize/2,SEEK_CUR);//go 3/4 of the read lenght back
-		readRet = read(fd, buf, 2*filePathSize);//fill the hole buffer again
+	}
 
-	}
-	if (strstr(buf, filePath) != NULL ) {//now that we ended the loop verify if last read has a match
-		close(fd);
-		free(buf);
-		return true;
-	}
+	//didn't find nothing
+	fclose(theBckpFile);
+	free(buf);
 	return false;
 
 
 }
+
 //given a list of file paths returns a list of bools of the same size stating if a file is to be backed up or not
 bool * getUpdateArray(char **list, char* bckpFolder) {
 
 	int size = 0;
-	while (list[size] != NULL ) { //get list Size
-		size++;
-	}
-	bool *updateArray = malloc(size * sizeof(bool));//TODO maybe do this using realloc and spare the first cicle??
+	while (list[size] != NULL ) {size++;}//find out list size
+
+	bool *updateArray = malloc(size * sizeof(bool));
+
 	char *bckpFilePath = createPath(bckpFolder, "__bckpinfo__");
 
 	int backupTimeStamp=getFileModificationTS(bckpFilePath);
 
-
 	int i = 0;
-	for (; i < size; i++) {
+	for (; i < size; i++) {//for every file in the list
+		printf("for file %s\n",list[i]);
 		int fileTS=getFileModificationTS(list[i]);
-		if (fileTS > backupTimeStamp|| filePresentInBckp(list[i], bckpFilePath) == false) updateArray[i] = true;
-		else updateArray[i] = false;
+
+		if (fileTS > backupTimeStamp|| (filePresentInBckp(list[i], bckpFilePath) == false)){updateArray[i] = true;}//if it was changed or is not even present at last backup we should backup it
+
+		else {updateArray[i] = false;}
 	}
+
 	free(bckpFilePath);
-
-
 	return updateArray;
 
 }
 
-ErrorCode generateBackpFile(char ** fileList, char *destPath) {
+ErrorCode generateBackpFile(char ** fileList, char *destPath) {//generates backup file with necessary information
 
 	char* filePath = createPath(destPath, "__bckpinfo__");
 
-	int fd = open(filePath, O_RDWR | O_CREAT, S_IRWXU | S_IRWXG | S_IRWXO ); //TODO change permissions here see necessary mask on linux.die
+	int fd = open(filePath, O_RDWR | O_CREAT, S_IRUSR ); //only read permissions (can't be changed)
 
 	if (fd == -1) {
 		perror("Impossible to create Backup File: ");
@@ -290,21 +314,22 @@ ErrorCode generateBackpFile(char ** fileList, char *destPath) {
 
 	time_t rawtime;
 	time(&rawtime);//fill with current timestamp
+
 	char buf[12];
 	sprintf(buf, "%d\n", (int) rawtime);
-	int retWrite = write(fd, buf, 11);
+	int retWrite = write(fd, buf, 11);//write current timestamp
 
 	if (retWrite == -1) { //could not write
 		close(fd);
-		unlink(filePath);//TODO wtf is unlink doing here? what does it do?
+		unlink(filePath);//delete file
 		free(filePath);
 		return CREATE_BACKUP_FILE_ERR;
 	}
 
 	int i = 0;
-	for (; fileList[i] != NULL ; i++) {
-		retWrite = write(fd, fileList[i], strlen(fileList[i]));
-		write(fd, "\n", 1);
+	for (; fileList[i] != NULL ; i++) {//for every file in the fileList
+		retWrite = write(fd, fileList[i], strlen(fileList[i]));//write path to bkcp file
+		write(fd, "\n", 1);//write \n at end
 	}
 
 	close(fd);
@@ -316,9 +341,11 @@ ErrorCode generateBackpFile(char ** fileList, char *destPath) {
 
 char* createNewBackupDir(char* destPath) {
 	time_t rawtime;
-	struct tm * timeinfo;//TODO check if this should be freed
+	struct tm * timeinfo;//dont free it
 	time(&rawtime);
 	timeinfo = localtime(&rawtime);
+
+
 
 	char dirName[20];
 	sprintf(dirName, "%d_%d_%d_%d_%d_%d", timeinfo->tm_year + 1900,
@@ -329,7 +356,7 @@ char* createNewBackupDir(char* destPath) {
 	char* dirPath = createPath(fullDestPath, dirName);
 	free(fullDestPath);
 
-	int ret = mkdir(dirPath, S_IRWXU | S_IRWXG | S_IRWXO); //TODO change permissions
+	int ret = mkdir(dirPath, S_IRWXU); //read write and execute code in this dir is possible
 
 	if (ret != 0) {
 		perror("Problem Creating New Backup Directory: ");
@@ -351,22 +378,28 @@ void printContentToBeUpdated(char** list, bool *mask) {
 
 void makeBackup(char* sourceFilePath, char* destPath) {
 
-	int originFD = open(sourceFilePath, O_RDONLY);
-	char*fileName = extractFileName(sourceFilePath);
-	char*completeFilePath = createPath(destPath, fileName);
-	int destFD = open(completeFilePath, O_RDWR | O_CREAT,
-			S_IRWXG | S_IRWXU | S_IRWXG); //TODO change this premissions maybe use the origin files one??
+	int originFD = open(sourceFilePath, O_RDONLY);//open file to be backed up
 
-	char buf[200];
+	char*fileName = extractFileName(sourceFilePath);//extract file name from the path
+
+	char*completeFilePath = createPath(destPath, fileName);//append it to the directory path
+
+	int destFD = open(completeFilePath, O_RDWR | O_CREAT,S_IRUSR); //create a new read only file
+
+	char buf[TRANSFER_BUF_SIZE];
 	int readRet;
 
-	while ((readRet=read(originFD, buf, 200)) == 200) write(destFD, buf, readRet);//write what you've just read
+	while ((readRet=read(originFD, buf, TRANSFER_BUF_SIZE)) == TRANSFER_BUF_SIZE){
+		write(destFD, buf, readRet); //write what you've just read
+	}
 
-	write(destFD, buf, readRet);//write whats left on the buffer
+	write(destFD, buf, readRet);//write what's left on the buffer
 
 
+	//close both files
 	close(originFD);
 	close(destFD);
+
 	free(completeFilePath);
 }
 
@@ -376,24 +409,34 @@ void backupLoop(char **list, bool *mask, char* source) {
 	int i = 0;
 
 	for (; list[i] != NULL ; i++) {
-		if (mask[i] == true) {
-			pid = fork();
-			if (pid == 0) break;
+
+		if (mask[i] == true) {//for each file in need to be backed up
+
+			pid = fork();//create a child process
+
+			if (pid == 0){ break;}//if it's a child break from this loop and start doing backup
+			nrSons++;
 		}
 
 	}
 
-	if (list[i] != NULL ) {
-		char* newLatestBckPath = getLatestBckpDir(source);
-		makeBackup(list[i], newLatestBckPath);
-		free(newLatestBckPath);
-	} else {
-		while (i-- != 0) wait();
+	if (list[i] != NULL ) {//if you're not at last list element(meaning you're not father)
+
+		char* latestBckPath = getLatestBckpDir(source);//grab latest backup dir
+		makeBackup(list[i], latestBckPath);//do the backup
+
+		free(latestBckPath);
+
+		exit(0);//you've done your backup you're done
+	} else {//if you're father
+		waitForSons();
 	}
 
 }
 
 int main(int argc, char **argv) {
+
+	installSigHandler();
 
 	DIR *source;
 	DIR *dest;
@@ -412,19 +455,24 @@ int main(int argc, char **argv) {
 	nextUpdateTime = actualTime + timeInterval;
 
 	while (1) { //endless loop
+		//printf("starting loop\n");
 
 		time(&actualTime);
 		if (actualTime >= nextUpdateTime) {
+			printf("will update\n");
+
 			//update nextUpdateTime
 			nextUpdateTime=actualTime+timeInterval;
 
 			char * latestBackupFilePath = getLatestBckpDir(argv[2]);
 
+			printf("got latest Backup File Path\n");
 			char **fileList = getFileList(argv[1]);
+			printf("got file list\n");
 			bool *updateMask = getUpdateArray(fileList, latestBackupFilePath);
-
+			printf("got update array\n");
 			printContentToBeUpdated(fileList, updateMask);
-
+			//printf("will create new Backup dir at %s\n",argv[2]);
 			char* backupDest = createNewBackupDir(argv[2]);
 
 			if (backupDest == NULL ) { //if we could not create the dir
@@ -446,7 +494,7 @@ int main(int argc, char **argv) {
 			if (latestBackupFilePath != NULL )free(latestBackupFilePath);
 
 			free(backupDest);
-			free(fileList);//TODO not tested
+			free(fileList);
 			time(&actualTime);
 			sleep(nextUpdateTime-actualTime-1);
 		}
