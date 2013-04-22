@@ -43,13 +43,14 @@ typedef enum {
 	false, true
 } bool;
 
-
+//A function used to way for the sons this program created
 void waitForSons(){
 	while(nrSons--!=0){
 		wait();
 	}
 }
 
+//An Handler for SIGUSR1 that waits for all forked processes and then ends execution
 void sigUSR1_Handler(int n){
 	printf("called\n");
 
@@ -57,6 +58,7 @@ void sigUSR1_Handler(int n){
 	exit(1);
 }
 
+//A function that installs the signal handler for SIGUSR1
 void installSigHandler(){
 	struct sigaction mySigAction;
 	mySigAction.sa_handler=sigUSR1_Handler;
@@ -65,7 +67,7 @@ void installSigHandler(){
 }
 
 
-
+// Returns a string with the path of a file/directory  given it's parent directory (parentDir) and the file name (name)
 char * createPath(char* parentDir,char *name){
 
 	if(parentDir==NULL || name==NULL){return NULL;}
@@ -84,6 +86,7 @@ char * createPath(char* parentDir,char *name){
 
 }
 
+// Verifies if the directory to be backed up is the one where the backup is supposed to go
 bool SourceIsDest(char* sourcePath, char* destPath) {
 	char *fullSourcePath = (char*) canonicalize_file_name(sourcePath);
 	char *fullDestPath = (char*) canonicalize_file_name(destPath);
@@ -97,6 +100,7 @@ bool SourceIsDest(char* sourcePath, char* destPath) {
 
 }
 
+//A function that verifies eventual errors coming from user input
 ErrorCode verifyErrors(int argc, char **argv, DIR **source, DIR **dest) {
 
 	if (argc != 4) { //verify number of args
@@ -131,6 +135,7 @@ ErrorCode verifyErrors(int argc, char **argv, DIR **source, DIR **dest) {
 
 }
 
+//Returns the timestamp of a given Backup info file
 int getBckpTimeStamp(char* dirPath) {
 	char* filePath = createPath(dirPath, "__bckpinfo__");
 	FILE * theFile=fopen(filePath,"r");
@@ -146,6 +151,7 @@ int getBckpTimeStamp(char* dirPath) {
 
 }
 
+//Returns the latest backup directory
 char * getLatestBckpDir(char *destDirPath) {
 
 	DIR * dest = opendir(destDirPath);
@@ -184,6 +190,7 @@ char * getLatestBckpDir(char *destDirPath) {
 
 }
 
+//Returns the number of files inside a given directory
 int getNumOfFiles(char* dirPath) {
 	int nr = 0;
 	struct dirent *dir_entry;
@@ -202,9 +209,9 @@ int getNumOfFiles(char* dirPath) {
 	return nr;
 }
 
+//Returns a list of pathes of the files inside a given directory (sourcePath)
 char** getFileList(char * sourcePath) {
 	int nrOfFilesInSource = getNumOfFiles(sourcePath);
-	printf("got num files = %d\n",nrOfFilesInSource);
 	DIR *source = opendir(sourcePath);
 	struct dirent *dir_entry;
 	char ** fileList = malloc(nrOfFilesInSource * sizeof(char*) + 1);
@@ -213,31 +220,28 @@ char** getFileList(char * sourcePath) {
 	char * sourceCompletePath = (char*) canonicalize_file_name(sourcePath);
 
 	int index = 0;
-	printf("will enter while\n");
 	while ((dir_entry = readdir(source)) != NULL ) {
 
 		if (dir_entry->d_type == DT_REG){
 			fileList[index++] = createPath(sourceCompletePath,dir_entry->d_name);
-			printf("created path %s\n",fileList[index-1]);
 		}
 
 	}
-	printf("ended\n");
 
 	closedir(source);
 
-	printf("will close\n");
 	free(sourceCompletePath);
-	printf("will return\n");
 	return fileList;
 }
 
+//Returns a timestamp of a given file's modification date
 int getFileModificationTS(char* filePath) {
 	struct stat buf;
 	stat(filePath, &buf);
 	return buf.st_mtime;
 }
 
+//Returns a name of a file given it's path
 char * extractFileName(char * path) {
 
 	char *namePtr = strchr(path, '/');//find first /
@@ -287,7 +291,6 @@ bool * getUpdateArray(char **list, char* bckpFolder) {
 
 	int i = 0;
 	for (; i < size; i++) {//for every file in the list
-		printf("for file %s\n",list[i]);
 		int fileTS=getFileModificationTS(list[i]);
 
 		if (fileTS > backupTimeStamp|| (filePresentInBckp(list[i], bckpFilePath) == false)){updateArray[i] = true;}//if it was changed or is not even present at last backup we should backup it
@@ -300,6 +303,7 @@ bool * getUpdateArray(char **list, char* bckpFolder) {
 
 }
 
+//A function that creates and fills a backup file info given the list of files to include in the backup (fileList) inside a directory (destPath)
 ErrorCode generateBackpFile(char ** fileList, char *destPath) {//generates backup file with necessary information
 
 	char* filePath = createPath(destPath, "__bckpinfo__");
@@ -339,6 +343,7 @@ ErrorCode generateBackpFile(char ** fileList, char *destPath) {//generates backu
 
 }
 
+//Creates a new directory to hold a given backup inside a given directory (destPath)
 char* createNewBackupDir(char* destPath) {
 	time_t rawtime;
 	struct tm * timeinfo;//dont free it
@@ -366,6 +371,7 @@ char* createNewBackupDir(char* destPath) {
 
 }
 
+//Prints the content about to be updated in a readable way
 void printContentToBeUpdated(char** list, bool *mask) {
 	int i = -1;//-1 to increase at every iteration
 	printf("\n######Files to Backup:#######\n");
@@ -376,6 +382,7 @@ void printContentToBeUpdated(char** list, bool *mask) {
 	}
 }
 
+//A function that backs up a file in with a given path (sourceFilePath) to a given directory (destPath)
 void makeBackup(char* sourceFilePath, char* destPath) {
 
 	int originFD = open(sourceFilePath, O_RDONLY);//open file to be backed up
@@ -403,10 +410,12 @@ void makeBackup(char* sourceFilePath, char* destPath) {
 	free(completeFilePath);
 }
 
+//the main program function that calls fork for every file to be backed up and restores them
 void backupLoop(char **list, bool *mask, char* source) {
 
 	int pid;
 	int i = 0;
+	nrSons=0;
 
 	for (; list[i] != NULL ; i++) {
 
@@ -459,18 +468,14 @@ int main(int argc, char **argv) {
 
 		time(&actualTime);
 		if (actualTime >= nextUpdateTime) {
-			printf("will update\n");
 
 			//update nextUpdateTime
 			nextUpdateTime=actualTime+timeInterval;
 
 			char * latestBackupFilePath = getLatestBckpDir(argv[2]);
 
-			printf("got latest Backup File Path\n");
 			char **fileList = getFileList(argv[1]);
-			printf("got file list\n");
 			bool *updateMask = getUpdateArray(fileList, latestBackupFilePath);
-			printf("got update array\n");
 			printContentToBeUpdated(fileList, updateMask);
 			//printf("will create new Backup dir at %s\n",argv[2]);
 			char* backupDest = createNewBackupDir(argv[2]);
